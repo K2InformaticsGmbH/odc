@@ -107,12 +107,41 @@ erloci_test() ->
             User = list_to_binary(UserStr),
             Password = list_to_binary(PasswordStr),
             OciSession = ?PROFILE(OciPort, get_session, [Tns, User, Password]),
-            SelCountStmt= ?PROFILE(OciSession, prep_sql, [?COUNT_SQL]),
+            SelCountStmt = ?PROFILE(OciSession, prep_sql, [?COUNT_SQL]),
             ?PROFILE(SelCountStmt, exec_stmt, []),
             {{rows,[[RowCount]]},true} = ?PROFILE(SelCountStmt, fetch_rows, [10]),
-            io:format("COUNT_SQL : rowcount ~s~n", [oci_util:from_num(RowCount)]),
+            Total = oci_util:from_num(RowCount),
+            io:format("          COUNT_SQL : rowcount ~s~n", [Total]),
             ?PROFILE(SelCountStmt, close, []),
+            {ReadTime, _} = timer:tc(fun erloci_read_rows/2, [OciSession, Total]),
+            io:format("!!!! ROWS_SQL ~p rows in ~p us~n", [Total, ReadTime]),
             ?PROFILE(OciSession, close, []),
             ?PROFILE(OciPort, close, []);
         Error -> error(Error)
     end.
+
+erloci_read_rows(OciSession, Total) ->
+    SelStmt = ?PROFILE(OciSession, prep_sql, [?ROWS_SQL]),
+    ColDef = ?PROFILE(SelStmt, exec_stmt, []),
+    io:format("          ROWS_SQL : columns ~p~n", [ColDef]),
+    erloci_read_rows(SelStmt, false, Total, 0, 0, 0, 0).
+
+erloci_read_rows(SelStmt, true, _, _, _, _, _) ->
+    ?PROFILE(SelStmt, close, []);
+erloci_read_rows(SelStmt, false, Total, OldRowCount, RowBytes, RowCount, FetchCalls) ->
+    {{rows,Rows},More} = SelStmt:fetch_rows(1000),
+    {OldRowCount1, RowBytes1, FetchCalls1} = 
+    if RowCount - OldRowCount > 1000 ->
+           io:format("ROWS_SQL read ~p of ~s, fetched bytes ~p in ~p trips~n",
+                     [RowCount, Total, RowBytes, FetchCalls]),
+           {RowCount, 0, 0};
+       true ->
+           {OldRowCount,
+            RowBytes + byte_size(term_to_binary(Rows)),
+            FetchCalls + 1}
+    end,
+    erloci_read_rows(SelStmt, More, Total, OldRowCount1,
+                     RowBytes1,
+                     RowCount + length(Rows),
+                     FetchCalls1).
+
