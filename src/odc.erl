@@ -12,7 +12,7 @@
 -export([start/0, start/2, stop/0, stop/1]).
 
 %% Supervisor callbacks
--export([init/1]).
+-export([init/1, config/0, jamdb_test/0, erloci_test/0]).
 
 %%====================================================================
 %% API
@@ -39,3 +39,80 @@ init([]) ->
 %% Internal functions
 %%====================================================================
 
+config() ->
+    file:consult(code:where_is_file(".config.erl")).
+
+% Current count 1948464
+-define(COUNT_SQL, "
+SELECT
+    COUNT(*)
+FROM
+    BDCBX
+WHERE
+    CBX_DATETIME >= TO_DATE('04.04.2018')
+    AND CBX_DATETIME < TO_DATE('05.04.2018')
+").
+
+-define(ROWS_SQL, "
+SELECT
+    CBX_ID, CBX_BIHID, CBX_MAIN_ATTRS, CBX_DATETIME, CBX_EVENTTYPE,
+    CBX_GROUP_ATTRS, CBX_UMS_NODE_ID, CBX_REDIRECT_REASON, CBX_RESELLER_ID,
+    CBX_ORGANISATION_ID, CBX_COS_ID, CBX_MEDIABOX, CBX_LAST_COS_CHANGE, CBX_IMSI
+    , CBX_SESSION_ID, CBX_PARAM_ATTRS, CBX_CALLER, CBX_CALLEE, CBX_DURATION,
+    CBX_PAGES, CBX_DATESTART, CBX_DATEEND, CBX_ADMIN_MESSAGE_ID, CBX_MESSAGE_ID,
+    CBX_MEMO_ID, CBX_STATUS, CBX_REASON, CBX_CALL_TYPE, CBX_MEDIABOX_ID,
+    CBX_MEDIABOX_TYPE, CBX_DESTINATION, CBX_DESTINATION_PHONE,
+    CBX_DESTINATION_EMAIL, CBX_DESTINATION_TYPE, CBX_PREFIX,
+    CBX_TERMINATION_SIDE, CBX_TERMINATION_REASON, CBX_MESSAGE_DEPOSIT_DATE
+FROM
+    BDCBX
+WHERE
+    CBX_DATETIME >= TO_DATE('04.04.2018')
+    and CBX_DATETIME < TO_DATE('05.04.2018')
+").
+
+-define(PROFILE(_M, _F, _A),
+        (fun() ->
+            {_T, _V} = timer:tc(_M, _F, _A),
+            io:format("[~p:~p:~p] ~p:~p/~p in ~p us~n",
+                      [?MODULE, ?FUNCTION_NAME, ?LINE, _M, _F, length(_A), _T]),
+            _V
+         end)()
+       ).
+
+jamdb_test() ->
+    case catch config() of
+        {ok, [#{host := Host, port := Port, user := User,
+                password := Password, service_name := Service}]} ->
+            Opts = [{host, Host},
+                    {port, Port},
+                    {user, User},
+                    {password, Password},
+                    {service_name, Service},
+                    {app_name, "jamdbtest"}],
+            {ok, Pid} = ?PROFILE(jamdb_oracle, start_link, [Opts]),
+            ?PROFILE(jamdb_oracle, sql_query, [Pid, ?COUNT_SQL]);
+        Error -> error(Error)
+    end.
+
+erloci_test() ->
+    case catch config() of
+        {ok, [#{tns := TnsStr, user := UserStr, password := PasswordStr}]} ->
+            OciPort = ?PROFILE(
+                         erloci, new,
+                         [[{logging, false},
+                           {env, [{"NLS_LANG", "GERMAN_SWITZERLAND.AL32UTF8"}]}]]
+                       ),
+            Tns = list_to_binary(TnsStr),
+            User = list_to_binary(UserStr),
+            Password = list_to_binary(PasswordStr),
+            OciSession = ?PROFILE(OciPort, get_session, [Tns, User, Password]),
+            SelCountStmt= ?PROFILE(OciSession, prep_sql, [?COUNT_SQL]),
+            ?PROFILE(SelCountStmt, exec_stmt, []),
+            {{rows,[[RowCount]]},true} = ?PROFILE(SelCountStmt, fetch_rows, [10]),
+            io:format("COUNT_SQL : rowcount ~s~n", [oci_util:from_num(RowCount)]),
+            ?PROFILE(SelCountStmt, close, []),
+            ?PROFILE(OciSession, close, []),
+            ?PROFILE(OciPort, close, []);
+        Error -> error(Error)
+    end.

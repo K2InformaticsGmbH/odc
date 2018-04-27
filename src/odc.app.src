@@ -6,7 +6,7 @@
   {applications,
    [kernel,
     stdlib,
-    eroci,
+    erloci,
     jamdb_oracle
    ]},
   {env,[]},
