@@ -1,2 +1,2 @@
-# ora_drv_compare
-performance comparison between oracle drivers
+# Oracle Driver Compare
+Performance comparison between erlang oracle drivers
