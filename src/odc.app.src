@@ -1,0 +1,18 @@
+{application, odc,
+ [{description, "performance comparison between oracle drivers"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { odc, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    eroci,
+    jamdb_oracle
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
