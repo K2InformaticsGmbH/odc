@@ -11,4 +11,3 @@ rel/example_project
 .rebar
 *.crashdump
 _build/
-.config.erl
