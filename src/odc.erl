@@ -12,7 +12,7 @@
 -export([start/0, start/2, stop/0, stop/1]).
 
 %% Supervisor callbacks
--export([init/1, config/0, jamdb_test/0, erloci_test/0]).
+-export([init/1, config/0, jamdb_test/0, erloci_test/0, erloci_nif_test/0]).
 
 %%====================================================================
 %% API
@@ -141,6 +141,77 @@ erloci_read_rows(SelStmt, false, Total, OldRowCount, RowBytes, RowCount, FetchCa
             FetchCalls + 1}
     end,
     erloci_read_rows(SelStmt, More, Total, OldRowCount1,
+                     RowBytes1,
+                     RowCount + length(Rows),
+                     FetchCalls1).
+
+erloci_nif_test() ->
+    case catch config() of
+        {ok, [#{tns := TnsStr, user := UserStr, password := PasswordStr}]} ->
+               E1 =  erloci_nif:ociEnvNlsCreate(0,0),
+               {ok, CharsetId} = erloci_nif_drv:ociNlsCharSetNameToId(E1, <<"AL32UTF8">>),
+               ok = erloci_nif:ociEnvHandleFree(E1),
+               Envhp =  erloci_nif:ociEnvNlsCreate(CharsetId,CharsetId),
+               ok = erloci_nif:ociAttrSet(Envhp, 'OCI_HTYPE_ENV', text, <<"GERMAN">>,'OCI_ATTR_ENV_NLS_LANGUAGE'),
+               ok = erloci_nif:ociAttrSet(Envhp, 'OCI_HTYPE_ENV', text, <<"SWITZERLAND">>,'OCI_ATTR_ENV_NLS_TERRITORY'),
+            Tns = list_to_binary(TnsStr),
+            User = list_to_binary(UserStr),
+            Password = list_to_binary(PasswordStr),
+
+            {ok, Spoolhp} =  erloci_nif:ociSessionPoolCreate(Envhp, Tns,
+                   2, 10, 1, User, Password),
+            {ok, Authhp} =  erloci_nif:ociAuthHandleCreate(Envhp, User, Password),
+            {ok, Svchp} =  erloci_nif:ociSessionGet(Envhp, Authhp, Spoolhp),
+            {ok, Stmthp} = erloci_nif:ociStmtHandleCreate(Envhp),
+            ok = ?PROFILE(erloci_nif, ociStmtPrepare, [Stmthp, list_to_binary(?COUNT_SQL)]),
+
+            {ok, _X} = ?PROFILE(erloci_nif, ociStmtExecute, [Svchp, Stmthp, #{}, 0, 0, 'OCI_DEFAULT']),
+            %% io:format("Stmt res = ~p\r\n",[X]),
+
+            {ok, [[Total]], _} = ?PROFILE(erloci_nif, ociStmtFetch, [Stmthp, 1]),
+
+
+            %% {{rows,[[RowCount]]},true} = ?PROFILE(SelCountStmt, fetch_rows, [10]), oci_util:from_num(T
+            io:format("          COUNT_SQL : rowcount ~s~n", [Total]),
+
+            ok = ?PROFILE(erloci_nif, ociStmtHandleFree, [Stmthp]),
+
+            {ReadTime, _} = timer:tc(fun erloci_nif_read_rows/3, [Envhp, Svchp, Total]),
+            io:format("!!!! ROWS_SQL ~p rows in ~p us~n", [Total, ReadTime]),
+
+            ok = ?PROFILE(erloci_nif, ociSessionRelease, [Svchp]),
+            ok = ?PROFILE(erloci_nif, ociSessionPoolDestroy, [Spoolhp]),
+            ok = ?PROFILE(erloci_nif, ociEnvHandleFree, [Envhp]),
+            ok = ?PROFILE(erloci_nif, ociTerminate, []);
+            %%{ReadTime, _} = timer:tc(fun erloci_read_rows/2, [OciSession, Total]),
+            %%io:format("!!!! ROWS_SQL ~p rows in ~p us~n", [Total, ReadTime]),
+
+        Error -> error(Error)
+    end.
+
+erloci_nif_read_rows(Envhp, Svchp, Total) ->
+    {ok, Stmthp} = erloci_nif:ociStmtHandleCreate(Envhp),
+    ok = ?PROFILE(erloci_nif, ociStmtPrepare, [Stmthp, list_to_binary(?ROWS_SQL)]),
+    {ok, ColDef} = ?PROFILE(erloci_nif, ociStmtExecute, [Svchp, Stmthp, #{}, 0, 0, 'OCI_DEFAULT']),
+    io:format("          ROWS_SQL : columns ~p~n", [ColDef]),
+    erloci_nif_read_rows(Stmthp, false, Total, 0, 0, 0, 0).
+
+erloci_nif_read_rows(Stmthp, true, _, _, _, _, _) ->
+    ok = ?PROFILE(erloci_nif, ociStmtHandleFree, [Stmthp]);
+erloci_nif_read_rows(Stmthp, false, Total, OldRowCount, RowBytes, RowCount, FetchCalls) ->
+    {ok, Rows, More} = ?PROFILE(erloci_nif, ociStmtFetch, [Stmthp, 1000]),
+
+    {OldRowCount1, RowBytes1, FetchCalls1} = 
+    if RowCount - OldRowCount > 1000 ->
+           io:format("ROWS_SQL read ~p of ~s, fetched bytes ~p in ~p trips~n",
+                     [RowCount, Total, RowBytes, FetchCalls]),
+           {RowCount, 0, 0};
+       true ->
+           {OldRowCount,
+            RowBytes + byte_size(term_to_binary(Rows)),
+            FetchCalls + 1}
+    end,
+    erloci_nif_read_rows(Stmthp, More, Total, OldRowCount1,
                      RowBytes1,
                      RowCount + length(Rows),
                      FetchCalls1).
